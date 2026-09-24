@@ -35,4 +35,9 @@ pub mod remittance_stablecoin {
     pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
         ctx.accounts.handler()
     }
+
+    /// Transfers public tokens using the mint's current epoch fee configuration.
+    pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+        ctx.accounts.handler(amount)
+    }
 }

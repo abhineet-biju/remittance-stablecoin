@@ -4,4 +4,6 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("The mint metadata has already been initialized")]
     MetadataAlreadyInitialized,
+    #[msg("The transfer fee could not be calculated")]
+    FeeCalculationFailed,
 }
