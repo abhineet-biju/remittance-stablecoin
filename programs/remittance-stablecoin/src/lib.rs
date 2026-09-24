@@ -30,4 +30,9 @@ pub mod remittance_stablecoin {
     ) -> Result<()> {
         ctx.accounts.handler(name, symbol, uri)
     }
+
+    /// Lets the freeze authority approve an individual token account after KYC.
+    pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
+        ctx.accounts.handler()
+    }
 }
