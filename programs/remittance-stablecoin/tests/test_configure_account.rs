@@ -1,0 +1,451 @@
+mod common;
+
+use {
+    anchor_lang::{
+        prelude::Pubkey, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    },
+    anchor_spl::{
+        associated_token::spl_associated_token_account,
+        token_2022::spl_token_2022::{
+            self,
+            extension::{
+                confidential_transfer::ConfidentialTransferAccount,
+                confidential_transfer_fee::ConfidentialTransferFeeAmount,
+                transfer_fee::TransferFeeAmount, BaseStateWithExtensions, ExtensionType,
+                StateWithExtensions,
+            },
+            solana_zk_sdk::{
+                encryption::{
+                    auth_encryption::{AeCiphertext, AeKey},
+                    elgamal::ElGamalKeypair,
+                },
+                zk_elgamal_proof_program::{
+                    self,
+                    instruction::{ContextStateInfo, ProofInstruction},
+                    proof_data::{PubkeyValidityProofContext, PubkeyValidityProofData},
+                    state::ProofContextState,
+                },
+            },
+            state::{Account, AccountState},
+        },
+    },
+    common::{send, Fixture},
+    litesvm::types::TransactionResult,
+    solana_keypair::Keypair,
+    solana_signer::Signer,
+};
+
+struct ConfigureFixture {
+    mint: Fixture,
+    owner: Keypair,
+    ata: Pubkey,
+    elgamal: ElGamalKeypair,
+    aes: AeKey,
+    proof_context: Pubkey,
+}
+
+impl ConfigureFixture {
+    fn new() -> Self {
+        let mut f = Fixture::new();
+        let fee_key = ElGamalKeypair::new_rand();
+        let initialize = Instruction::new_with_bytes(
+            remittance_stablecoin::id(),
+            &remittance_stablecoin::instruction::InitializeConfidentialMint {
+                decimals: 6,
+                transfer_fee_basis_points: 100,
+                maximum_fee: 50_000,
+                withdraw_withheld_authority_elgamal_pubkey: fee_key.pubkey().into(),
+            }
+            .data(),
+            remittance_stablecoin::accounts::InitializeConfidentialMint {
+                payer: f.payer.pubkey(),
+                mint: f.mint.pubkey(),
+                authority: f.authority.pubkey(),
+                token_program: spl_token_2022::id(),
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        send(
+            &mut f.svm,
+            &f.payer,
+            &[initialize],
+            &[&f.mint, &f.authority],
+        )
+        .unwrap();
+        let owner = Keypair::new();
+        f.svm.airdrop(&owner.pubkey(), 1_000_000).unwrap();
+        let ata =
+            spl_associated_token_account::address::get_associated_token_address_with_program_id(
+                &owner.pubkey(),
+                &f.mint.pubkey(),
+                &spl_token_2022::id(),
+            );
+        // The payer can create the ATA without the owner's signature.
+        let create = spl_associated_token_account::instruction::create_associated_token_account(
+            &f.payer.pubkey(),
+            &owner.pubkey(),
+            &f.mint.pubkey(),
+            &spl_token_2022::id(),
+        );
+        send(&mut f.svm, &f.payer, &[create], &[]).unwrap();
+
+        // Test secrets remain off-chain; only the verified context and encrypted zero are submitted.
+        let elgamal = ElGamalKeypair::new_rand();
+        let aes = AeKey::new_rand();
+        let proof = PubkeyValidityProofData::new(&elgamal).unwrap();
+        let context = Keypair::new();
+        let size = std::mem::size_of::<ProofContextState<PubkeyValidityProofContext>>();
+        let create_context = solana_system_interface::instruction::create_account(
+            &f.payer.pubkey(),
+            &context.pubkey(),
+            f.svm.minimum_balance_for_rent_exemption(size),
+            size as u64,
+            &zk_elgamal_proof_program::ID,
+        );
+        let verify = ProofInstruction::VerifyPubkeyValidity.encode_verify_proof(
+            Some(ContextStateInfo {
+                context_state_account: &context.pubkey(),
+                context_state_authority: &owner.pubkey(),
+            }),
+            &proof,
+        );
+        send(&mut f.svm, &f.payer, &[create_context, verify], &[&context]).unwrap();
+        Self {
+            mint: f,
+            owner,
+            ata,
+            elgamal,
+            aes,
+            proof_context: context.pubkey(),
+        }
+    }
+
+    fn instruction(&self) -> Instruction {
+        Instruction::new_with_bytes(
+            remittance_stablecoin::id(),
+            &remittance_stablecoin::instruction::ConfigureAccount {
+                decryptable_zero_balance: self.aes.encrypt(0).to_bytes(),
+                maximum_pending_balance_credit_counter: 65_536,
+            }
+            .data(),
+            remittance_stablecoin::accounts::ConfigureAccount {
+                payer: self.mint.payer.pubkey(),
+                owner: self.owner.pubkey(),
+                mint: self.mint.mint.pubkey(),
+                token_account: self.ata,
+                proof_context: self.proof_context,
+                token_program: spl_token_2022::id(),
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+        )
+    }
+
+    fn configure(&mut self) -> TransactionResult {
+        let ix = self.instruction();
+        send(&mut self.mint.svm, &self.mint.payer, &[ix], &[&self.owner])
+    }
+
+    fn thaw_and_mint(&mut self, amount: u64) {
+        let thaw = Instruction::new_with_bytes(
+            remittance_stablecoin::id(),
+            &remittance_stablecoin::instruction::ThawAccount {}.data(),
+            remittance_stablecoin::accounts::ThawAccount {
+                mint: self.mint.mint.pubkey(),
+                token_account: self.ata,
+                authority: self.mint.authority.pubkey(),
+                token_program: spl_token_2022::id(),
+            }
+            .to_account_metas(None),
+        );
+        let mint_to = spl_token_2022::instruction::mint_to_checked(
+            &spl_token_2022::id(),
+            &self.mint.mint.pubkey(),
+            &self.ata,
+            &self.mint.authority.pubkey(),
+            &[],
+            amount,
+            6,
+        )
+        .unwrap();
+        send(
+            &mut self.mint.svm,
+            &self.mint.payer,
+            &[thaw, mint_to],
+            &[&self.mint.authority],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn configures_frozen_account_with_zero_balances_and_fees_but_without_approval() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let mint_before = f.mint.svm.get_account(&f.mint.mint.pubkey()).unwrap().data;
+    let proof_before = f.mint.svm.get_account(&f.proof_context).unwrap().data;
+    f.configure().unwrap();
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.owner, spl_token_2022::id());
+    assert_eq!(
+        after.lamports,
+        f.mint
+            .svm
+            .minimum_balance_for_rent_exemption(after.data.len())
+    );
+    assert!(after.data.len() > before.data.len());
+    let state = StateWithExtensions::<Account>::unpack(&after.data).unwrap();
+    let previous = StateWithExtensions::<Account>::unpack(&before.data).unwrap();
+    assert_eq!(state.base, previous.base);
+    assert_eq!(state.base.state, AccountState::Frozen);
+    assert_eq!(
+        state.get_extension::<TransferFeeAmount>().unwrap(),
+        previous.get_extension::<TransferFeeAmount>().unwrap()
+    );
+    let confidential = state
+        .get_extension::<ConfidentialTransferAccount>()
+        .unwrap();
+    assert!(!bool::from(confidential.approved));
+    assert_eq!(confidential.elgamal_pubkey, (*f.elgamal.pubkey()).into());
+    assert_eq!(confidential.pending_balance_lo, Default::default());
+    assert_eq!(confidential.pending_balance_hi, Default::default());
+    assert_eq!(confidential.available_balance, Default::default());
+    assert!(bool::from(confidential.allow_confidential_credits));
+    assert!(bool::from(confidential.allow_non_confidential_credits));
+    assert_eq!(u64::from(confidential.pending_balance_credit_counter), 0);
+    assert_eq!(
+        u64::from(confidential.expected_pending_balance_credit_counter),
+        0
+    );
+    assert_eq!(
+        u64::from(confidential.actual_pending_balance_credit_counter),
+        0
+    );
+    assert_eq!(
+        u64::from(confidential.maximum_pending_balance_credit_counter),
+        65_536
+    );
+    let balance = AeCiphertext::from_bytes(bytemuck::bytes_of(
+        &confidential.decryptable_available_balance,
+    ))
+    .unwrap();
+    assert_eq!(balance.decrypt(&f.aes), Some(0));
+    assert_eq!(
+        state
+            .get_extension::<ConfidentialTransferFeeAmount>()
+            .unwrap()
+            .withheld_amount,
+        Default::default()
+    );
+    assert_eq!(
+        f.mint.svm.get_account(&f.mint.mint.pubkey()).unwrap().data,
+        mint_before
+    );
+    assert_eq!(
+        f.mint.svm.get_account(&f.proof_context).unwrap().data,
+        proof_before
+    );
+}
+
+#[test]
+fn preserves_existing_public_funds_and_leaves_thawed_accounts_unapproved() {
+    let mut f = ConfigureFixture::new();
+    f.thaw_and_mint(1_000_000);
+    f.configure().unwrap();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let state = StateWithExtensions::<Account>::unpack(&before.data).unwrap();
+    assert_eq!(state.base.amount, 1_000_000);
+    assert_eq!(state.base.state, AccountState::Initialized);
+    let confidential = state
+        .get_extension::<ConfidentialTransferAccount>()
+        .unwrap();
+    assert!(!bool::from(confidential.approved));
+}
+
+#[test]
+fn creating_an_ata_does_not_authorize_the_payer_to_configure_it() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let mut ix = f.instruction();
+    ix.accounts
+        .iter_mut()
+        .find(|a| a.pubkey == f.owner.pubkey())
+        .unwrap()
+        .pubkey = f.mint.payer.pubkey();
+    let error = send(&mut f.mint.svm, &f.mint.payer, &[ix], &[]).unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("ConstraintTokenOwner")),
+        "{error:?}"
+    );
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.data, before.data);
+    assert_eq!(after.lamports, before.lamports);
+}
+
+#[test]
+fn requires_the_account_owner_signature() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let mut ix = f.instruction();
+    ix.accounts
+        .iter_mut()
+        .find(|a| a.pubkey == f.owner.pubkey())
+        .unwrap()
+        .is_signer = false;
+    let error = send(&mut f.mint.svm, &f.mint.payer, &[ix], &[]).unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("AccountNotSigner")),
+        "{error:?}"
+    );
+    assert_eq!(f.mint.svm.get_account(&f.ata).unwrap().data, before.data);
+}
+
+#[test]
+fn rejects_a_proof_account_owned_by_another_program() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let mut ix = f.instruction();
+    ix.accounts
+        .iter_mut()
+        .find(|a| a.pubkey == f.proof_context)
+        .unwrap()
+        .pubkey = f.owner.pubkey();
+    let error = send(&mut f.mint.svm, &f.mint.payer, &[ix], &[&f.owner]).unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("ConstraintOwner")),
+        "{error:?}"
+    );
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.data, before.data);
+    assert_eq!(after.lamports, before.lamports);
+}
+
+#[test]
+fn rejects_unverified_proof_context_and_rolls_back_reallocation_and_rent() {
+    let mut f = ConfigureFixture::new();
+    let context = Keypair::new();
+    let size = std::mem::size_of::<ProofContextState<PubkeyValidityProofContext>>();
+    let create = solana_system_interface::instruction::create_account(
+        &f.mint.payer.pubkey(),
+        &context.pubkey(),
+        f.mint.svm.minimum_balance_for_rent_exemption(size),
+        size as u64,
+        &zk_elgamal_proof_program::ID,
+    );
+    send(&mut f.mint.svm, &f.mint.payer, &[create], &[&context]).unwrap();
+    f.proof_context = context.pubkey();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let error = f.configure().unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("invalid instruction data")),
+        "{error:?}"
+    );
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.data, before.data);
+    assert_eq!(after.lamports, before.lamports);
+}
+
+#[test]
+fn rejects_reconfiguration_without_resetting_account_state() {
+    let mut f = ConfigureFixture::new();
+    f.configure().unwrap();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let error = f.configure().unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("already initialized")),
+        "{error:?}"
+    );
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.data, before.data);
+    assert_eq!(after.lamports, before.lamports);
+}
+
+#[test]
+fn rejects_a_mismatched_mint_before_reallocation() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    f.mint.mint = Keypair::new();
+    f.mint.initialize(100).unwrap();
+    let error = f.configure().unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("ConstraintTokenMint")),
+        "{error:?}"
+    );
+    let after = f.mint.svm.get_account(&f.ata).unwrap();
+    assert_eq!(after.data, before.data);
+    assert_eq!(after.lamports, before.lamports);
+}
+
+#[test]
+fn rejects_the_legacy_token_program() {
+    let mut f = ConfigureFixture::new();
+    let before = f.mint.svm.get_account(&f.ata).unwrap();
+    let mut ix = f.instruction();
+    ix.accounts
+        .iter_mut()
+        .find(|a| a.pubkey == spl_token_2022::id())
+        .unwrap()
+        .pubkey = anchor_spl::token::ID;
+    let error = send(&mut f.mint.svm, &f.mint.payer, &[ix], &[&f.owner]).unwrap_err();
+    assert!(
+        error
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("InvalidProgramId")),
+        "{error:?}"
+    );
+    assert_eq!(f.mint.svm.get_account(&f.ata).unwrap().data, before.data);
+}
+
+#[test]
+fn stores_the_owner_selected_pending_credit_limit() {
+    let mut f = ConfigureFixture::new();
+    let mut ix = f.instruction();
+    ix.data = remittance_stablecoin::instruction::ConfigureAccount {
+        decryptable_zero_balance: f.aes.encrypt(0).to_bytes(),
+        maximum_pending_balance_credit_counter: 7,
+    }
+    .data();
+    send(&mut f.mint.svm, &f.mint.payer, &[ix], &[&f.owner]).unwrap();
+    let account = f.mint.svm.get_account(&f.ata).unwrap();
+    let state = StateWithExtensions::<Account>::unpack(&account.data).unwrap();
+    assert_eq!(
+        u64::from(
+            state
+                .get_extension::<ConfidentialTransferAccount>()
+                .unwrap()
+                .maximum_pending_balance_credit_counter
+        ),
+        7
+    );
+    assert!(state
+        .get_extension_types()
+        .unwrap()
+        .contains(&ExtensionType::ConfidentialTransferFeeAmount));
+}

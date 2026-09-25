@@ -56,4 +56,16 @@ pub mod remittance_stablecoin {
             withdraw_withheld_authority_elgamal_pubkey,
         )
     }
+
+    /// Configures an existing account for confidential balances with its owner's signature.
+    pub fn configure_account(
+        ctx: Context<ConfigureAccount>,
+        decryptable_zero_balance: [u8; 36],
+        maximum_pending_balance_credit_counter: u64,
+    ) -> Result<()> {
+        ctx.accounts.handler(
+            decryptable_zero_balance,
+            maximum_pending_balance_credit_counter,
+        )
+    }
 }
