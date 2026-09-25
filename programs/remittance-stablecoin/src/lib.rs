@@ -68,4 +68,9 @@ pub mod remittance_stablecoin {
             maximum_pending_balance_credit_counter,
         )
     }
+
+    /// Lets the confidential-transfer authority approve an owner-configured account.
+    pub fn approve_account(ctx: Context<ApproveAccount>) -> Result<()> {
+        ctx.accounts.handler()
+    }
 }
