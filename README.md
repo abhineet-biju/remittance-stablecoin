@@ -45,6 +45,23 @@ Tests run locally with LiteSVM 0.16. No deployment or local validator is needed.
 
 The 77 integration tests cover authorities, frozen defaults, fee caps, epoch changes, proof validation, and the complete confidential lifecycle, including balance conservation and proof-account cleanup.
 
+## Test results
+
+All 77 integration tests and the program-ID test pass, with zero failures.
+
+<details>
+<summary>View test screenshots</summary>
+
+![Program-ID, apply-pending, and account approval tests passing](docs/images/tests-apply-approve.png)
+
+![Account configuration, deposit, and confidential mint tests passing](docs/images/tests-configure-deposit-confidential-mint.png)
+
+![Metadata, mint initialization, and account thawing tests passing](docs/images/tests-metadata-mint-thaw.png)
+
+![Public transfer, confidential transfer, and withdrawal tests passing](docs/images/tests-transfers-withdraw.png)
+
+</details>
+
 ## Written finding
 
 If a user moves tokens into confidential balances before the permanent delegate acts, the delegate cannot transfer or burn those confidential funds through its ordinary authority. It can act on public balances only. Manual approval controls entry into the confidential system; it does not grant seizure authority over funds already inside it.
