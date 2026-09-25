@@ -40,4 +40,20 @@ pub mod remittance_stablecoin {
     pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
         ctx.accounts.handler(amount)
     }
+
+    /// Creates a new mint with manual confidential approval, encrypted fees, and a permanent delegate.
+    pub fn initialize_confidential_mint(
+        ctx: Context<InitializeConfidentialMint>,
+        decimals: u8,
+        transfer_fee_basis_points: u16,
+        maximum_fee: u64,
+        withdraw_withheld_authority_elgamal_pubkey: [u8; 32],
+    ) -> Result<()> {
+        ctx.accounts.handler(
+            decimals,
+            transfer_fee_basis_points,
+            maximum_fee,
+            withdraw_withheld_authority_elgamal_pubkey,
+        )
+    }
 }
