@@ -12,18 +12,17 @@ use {
             transfer_fee::TransferFeeAmount, BaseStateWithExtensions, ExtensionType,
             StateWithExtensions,
         },
-        solana_zk_sdk::{
-            encryption::auth_encryption::AeCiphertext,
-            zk_elgamal_proof_program::{
-                self, proof_data::PubkeyValidityProofContext, state::ProofContextState,
-            },
-        },
         state::{Account, AccountState},
     },
     common::send,
     confidential::ConfigureFixture,
     solana_keypair::Keypair,
     solana_signer::Signer,
+    solana_zk_elgamal_proof_interface::{
+        self as zk_elgamal_proof_program, proof_data::PubkeyValidityProofContext,
+        state::ProofContextState,
+    },
+    solana_zk_sdk::encryption::auth_encryption::AeCiphertext,
 };
 
 #[test]
@@ -54,7 +53,10 @@ fn configures_frozen_account_with_zero_balances_and_fees_but_without_approval() 
         .get_extension::<ConfidentialTransferAccount>()
         .unwrap();
     assert!(!bool::from(confidential.approved));
-    assert_eq!(confidential.elgamal_pubkey, (*f.elgamal.pubkey()).into());
+    assert_eq!(
+        confidential.elgamal_pubkey,
+        f.elgamal.pubkey().to_bytes().into()
+    );
     assert_eq!(confidential.pending_balance_lo, Default::default());
     assert_eq!(confidential.pending_balance_hi, Default::default());
     assert_eq!(confidential.available_balance, Default::default());

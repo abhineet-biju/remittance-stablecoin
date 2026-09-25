@@ -1,15 +1,23 @@
+pub mod apply_pending;
 pub mod approve_account;
 pub mod configure_account;
+pub mod deposit;
 pub mod initialize_confidential_mint;
 pub mod initialize_metadata;
 pub mod initialize_mint;
 pub mod thaw_account;
 pub mod transfer;
+pub mod transfer_confidential;
+pub mod withdraw;
 
+pub use apply_pending::*;
 pub use approve_account::*;
 pub use configure_account::*;
+pub use deposit::*;
 pub use initialize_confidential_mint::*;
 pub use initialize_metadata::*;
 pub use initialize_mint::*;
 pub use thaw_account::*;
 pub use transfer::*;
+pub use transfer_confidential::*;
+pub use withdraw::*;

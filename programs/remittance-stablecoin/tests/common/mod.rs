@@ -41,6 +41,7 @@ impl Fixture {
         }
     }
 
+    #[allow(dead_code)] // Confidential-only suites initialize their own mint.
     pub fn instruction(&self, fee_basis_points: u16) -> Instruction {
         Instruction::new_with_bytes(
             remittance_stablecoin::id(),
@@ -61,6 +62,7 @@ impl Fixture {
         )
     }
 
+    #[allow(dead_code)] // Confidential-only suites initialize their own mint.
     pub fn initialize(&mut self, fee_basis_points: u16) -> TransactionResult {
         let ix = self.instruction(fee_basis_points);
         send(

@@ -3,24 +3,20 @@ use {
     anchor_lang::{
         prelude::Pubkey, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
     },
-    anchor_spl::{
-        associated_token::spl_associated_token_account,
-        token_2022::spl_token_2022::{
-            self,
-            solana_zk_sdk::{
-                encryption::{auth_encryption::AeKey, elgamal::ElGamalKeypair},
-                zk_elgamal_proof_program::{
-                    self,
-                    instruction::{ContextStateInfo, ProofInstruction},
-                    proof_data::{PubkeyValidityProofContext, PubkeyValidityProofData},
-                    state::ProofContextState,
-                },
-            },
-        },
-    },
+    anchor_spl::{associated_token::spl_associated_token_account, token_2022::spl_token_2022},
     litesvm::types::TransactionResult,
     solana_keypair::Keypair,
     solana_signer::Signer,
+    solana_zk_elgamal_proof_interface::{
+        self as zk_elgamal_proof_program,
+        instruction::{ContextStateInfo, ProofInstruction},
+        proof_data::PubkeyValidityProofContext,
+        state::ProofContextState,
+    },
+    solana_zk_sdk::{
+        encryption::{auth_encryption::AeKey, elgamal::ElGamalKeypair},
+        zk_elgamal_proof_program::build_pubkey_validity_proof_data,
+    },
 };
 
 pub struct ConfigureFixture {
@@ -28,6 +24,8 @@ pub struct ConfigureFixture {
     pub owner: Keypair,
     pub ata: Pubkey,
     pub elgamal: ElGamalKeypair,
+    #[allow(dead_code)] // Only confidential-transfer tests decrypt withheld fees.
+    pub fee_key: ElGamalKeypair,
     pub aes: AeKey,
     pub proof_context: Pubkey,
 }
@@ -42,7 +40,7 @@ impl ConfigureFixture {
                 decimals: 6,
                 transfer_fee_basis_points: 100,
                 maximum_fee: 50_000,
-                withdraw_withheld_authority_elgamal_pubkey: fee_key.pubkey().into(),
+                withdraw_withheld_authority_elgamal_pubkey: fee_key.pubkey().to_bytes(),
             }
             .data(),
             remittance_stablecoin::accounts::InitializeConfidentialMint {
@@ -81,7 +79,7 @@ impl ConfigureFixture {
         // Test secrets remain off-chain; only the verified context and encrypted zero are submitted.
         let elgamal = ElGamalKeypair::new_rand();
         let aes = AeKey::new_rand();
-        let proof = PubkeyValidityProofData::new(&elgamal).unwrap();
+        let proof = build_pubkey_validity_proof_data(&elgamal).unwrap();
         let context = Keypair::new();
         let size = std::mem::size_of::<ProofContextState<PubkeyValidityProofContext>>();
         let create_context = solana_system_interface::instruction::create_account(
@@ -104,6 +102,7 @@ impl ConfigureFixture {
             owner,
             ata,
             elgamal,
+            fee_key,
             aes,
             proof_context: context.pubkey(),
         }

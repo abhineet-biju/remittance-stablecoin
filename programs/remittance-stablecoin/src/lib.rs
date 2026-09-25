@@ -73,4 +73,45 @@ pub mod remittance_stablecoin {
     pub fn approve_account(ctx: Context<ApproveAccount>) -> Result<()> {
         ctx.accounts.handler()
     }
+
+    /// Moves public tokens into confidential pending balance.
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        ctx.accounts.handler(amount)
+    }
+
+    /// Consolidates pending funds using the owner's encrypted new available balance.
+    pub fn apply_pending(
+        ctx: Context<ApplyPending>,
+        expected_pending_balance_credit_counter: u64,
+        new_decryptable_available_balance: [u8; 36],
+    ) -> Result<()> {
+        ctx.accounts.handler(
+            expected_pending_balance_credit_counter,
+            new_decryptable_available_balance,
+        )
+    }
+
+    /// Withdraws available confidential funds into public balance.
+    pub fn withdraw(
+        ctx: Context<Withdraw>,
+        amount: u64,
+        new_decryptable_available_balance: [u8; 36],
+    ) -> Result<()> {
+        ctx.accounts
+            .handler(amount, new_decryptable_available_balance)
+    }
+
+    /// Transfers encrypted funds and withholds the mint's fee using verified proof contexts.
+    pub fn transfer_confidential(
+        ctx: Context<TransferConfidential>,
+        new_source_decryptable_available_balance: [u8; 36],
+        transfer_amount_auditor_ciphertext_lo: [u8; 64],
+        transfer_amount_auditor_ciphertext_hi: [u8; 64],
+    ) -> Result<()> {
+        ctx.accounts.handler(
+            new_source_decryptable_available_balance,
+            transfer_amount_auditor_ciphertext_lo,
+            transfer_amount_auditor_ciphertext_hi,
+        )
+    }
 }

@@ -61,7 +61,10 @@ fn approves_confidential_use_without_thawing_or_changing_balances_and_keys() {
         bytemuck::bytes_of(confidential),
         bytemuck::bytes_of(&expected)
     );
-    assert_eq!(confidential.elgamal_pubkey, (*f.elgamal.pubkey()).into());
+    assert_eq!(
+        confidential.elgamal_pubkey,
+        f.elgamal.pubkey().to_bytes().into()
+    );
     assert_eq!(
         state.get_extension::<TransferFeeAmount>().unwrap(),
         previous.get_extension::<TransferFeeAmount>().unwrap()
